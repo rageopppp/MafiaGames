@@ -103,6 +103,17 @@
   .nbar{height:8px;border-radius:6px;background:#2a1515;overflow:hidden;margin:6px 0 4px}
   .nbar i{display:block;height:100%;width:100%;transform-origin:left;animation:nshrink linear forwards}
   @keyframes nshrink{0%{transform:scaleX(1);background:#3fa66b}60%{background:#d9a441}85%,100%{background:#d33}to{transform:scaleX(0)}}
+  .nightfs{position:fixed;inset:0;z-index:60;overflow-y:auto;padding:18px 16px 30px;box-sizing:border-box;
+    background:radial-gradient(ellipse at 50% 0%,#14224a 0%,#0a0f26 45%,#05060f 100%);color:#e8ecff}
+  .nightfs .moon{font-size:54px;text-align:center;filter:drop-shadow(0 0 18px #9bb4ff88)}
+  .nightfs h1{text-align:center;margin:4px 0 2px;font-size:26px}
+  .nightfs .card{background:#0e1533cc;border-color:#2a3a7a}
+  .nightfs .pick{background:#16204a;border-color:#2c3c7c;color:#e8ecff}
+  .nightfs .pick.sel{background:#8b0000;border-color:#fff}
+  .nightfs .pick.dead{opacity:.35}
+  .nightfs .team{border:1px dashed #6f86e0;border-radius:12px;padding:10px;margin:10px 0}
+  .nightfs .ctl{display:flex;gap:8px;justify-content:center;margin:8px 0}
+  .nightfs .ctl button{width:auto;padding:8px 14px;font-size:14px}
   @keyframes kb{from{transform:scale(1)}to{transform:scale(1.16)}}
   @keyframes breathe{from{filter:brightness(.95) contrast(1)}to{filter:brightness(1.14) contrast(1.06)}}
   .glow{position:absolute;width:20%;height:20%;border-radius:50%;pointer-events:none;mix-blend-mode:screen;opacity:.35;
@@ -238,7 +249,7 @@ function checkWin(){
   if(m>=t) return "Mafia";
   return null;
 }
-let ON={kill:{},protect:{},investigate:{},res:{},conf:{}}, OV={}, OR={}, nightTimer=null, FL=false, AF=false;
+let ON={kill:{},protect:{},investigate:{},res:{},conf:{}}, OV={}, OVC={}, OR={}, nightTimer=null, FL=false, AF=false;
 
 function beginNightCore(){
   S.round++; S.phase="night";
@@ -246,7 +257,7 @@ function beginNightCore(){
   S.players.forEach(p=>{ const a=actAbility(p); if(a) abs.add(a); });
   S.steps=["kill","protect","investigate"].filter(a=>abs.has(a));
   S.stepIdx=0; S.night={kill:null,protect:null,investigate:null}; S.detResult=null; S.peek=false;
-  ON={kill:{},protect:{},investigate:{},res:{},conf:{}}; OV={}; S.voteSel=null;
+  ON={kill:{},protect:{},investigate:{},res:{},conf:{}}; OV={}; OVC={}; S.voteSel=null;
   if(S.mode==="online-host"){ S.nightEnds=S.nightLen?Date.now()+S.nightLen*1000:0; checkNightDone(); }
 }
 function applyNight(victim, protects, inv){
@@ -387,6 +398,7 @@ function runBots(){
       if(ab==="kill"){ const prev=Object.values(ON.kill); if(prev.length&&rnd(100)<80) t=[prev[0]]; }
       if(t.length) handleAction(i,{t:"act",ability:ab,choice:t[rnd(t.length)]});
     }
+    else if((ph==="vote"||ph==="day")&&p.alive&&OV[i]!==undefined&&!OVC[i]){ if(rnd(100)<50) handleAction(i,{t:"vconfirm"}); }
     else if((ph==="vote"||ph==="day")&&p.alive&&OV[i]===undefined){
       const o=opts(i,isMafia(p)); handleAction(i,{t:"vote",choice:(!o.length||rnd(100)<10)?"none":o[rnd(o.length)]});
     }
@@ -441,8 +453,13 @@ function handleAction(idx,m){
   else if(m.t==="vote" && (S.phase==="vote"||S.phase==="day") && p.alive){
     const t=m.choice==="none"?"none":+m.choice;
     if(t!=="none" && !(S.players[t]&&S.players[t].alive)) return;
+    if(OVC[idx]) return;                                  // confirmed = locked
     OV[idx]=t; pushAll(); render();
-    if(alive().every(q=>OV[S.players.indexOf(q)]!==undefined)) setTimeout(()=>{ if(S.phase==="vote"||S.phase==="day") A.hostCloseVote(); },900);
+  }
+  else if(m.t==="vconfirm" && (S.phase==="vote"||S.phase==="day") && p.alive){
+    if(OV[idx]===undefined) return;
+    OVC[idx]=true; pushAll(); render();
+    if(alive().every(q=>OVC[S.players.indexOf(q)])) setTimeout(()=>{ if(S.phase==="vote"||S.phase==="day") A.hostCloseVote(); },900);
   }
   else if(m.t==="bomb" && S.phase==="bomb" && idx===S.bombIdx){
     const t=+m.choice; if(!(S.players[t]&&S.players[t].alive)) return;
@@ -457,6 +474,12 @@ function allowedTargets(p,idx,ab){
     out.push(i);
   });
   return out;
+}
+function nightGroup(i){
+  const p=S.players[i]; if(!p||!p.alive) return [];
+  if(isMafia(p)) return S.players.map((q,j)=>({q,j})).filter(o=>o.j!==i&&o.q.alive&&isMafia(o.q));
+  if(actAbility(p)) return S.players.map((q,j)=>({q,j})).filter(o=>o.j!==i&&o.q.alive&&o.q.role===p.role);
+  return [];
 }
 function checkNightDone(){
   if(S.phase!=="night" || nightTimer) return;
@@ -506,11 +529,12 @@ function viewFor(idx){
   if(S.phase==="reveal") v.ready=!!OR[idx];
   if(S.phase==="night" && p.alive){
     const ab=actAbility(p);
-    if(ab) v.act={ability:ab, targets:allowedTargets(p,idx,ab), chosen:ON[ab][idx]===undefined?null:ON[ab][idx], confirmed:!!ON.conf[idx]};
+    if(ab) v.act={ability:ab, targets:allowedTargets(p,idx,ab), chosen:ON[ab][idx]===undefined?null:ON[ab][idx], confirmed:!!ON.conf[idx],
+      group:nightGroup(idx).map(o=>{ const a=actAbility(o.q), t=ON[a][o.j]; return {name:o.q.name, pick:t===undefined?null:S.players[t].name, ok:!!ON.conf[o.j]}; })};
   }
   if(S.phase==="vote"||S.phase==="day"){
     v.vote={chosen:OV[idx]===undefined?null:OV[idx], voted:S.players.filter((q,i)=>OV[i]!==undefined).map(q=>q.name),
-            counts:S.players.map((q,i)=>Object.values(OV).filter(x=>x===i).length),
+            counts:S.players.map((q,i)=>Object.values(OV).filter(x=>x===i).length), confirmed:!!OVC[idx], cc:S.players.filter((q,i)=>q.alive&&OVC[i]).length, total:S.players.filter(q=>q.alive).length,
             targets:S.players.map((q,i)=>q.alive?i:-1).filter(i=>i>=0)};
   }
   if(S.phase==="bomb") v.bomb={you:idx===S.bombIdx, name:S.players[S.bombIdx].name, targets:S.players.map((q,i)=>q.alive?i:-1).filter(i=>i>=0)};
@@ -697,7 +721,8 @@ function updateCenter(n){
   else if(ph==="reveal"){ l1="🤫 Roles dealt"; l2="Check your phone privately."; }
   else if(ph==="night"){ l1=`🌙 Night ${round}`; const ne=nightEndsAt(); l2=ne?`Eyes closed. ${Math.max(0,Math.ceil((ne-Date.now())/1000))}s left`:"Eyes closed. Cameras off."; }
   else if(ph==="day"&&meet.ann&&meet.ann.shown.length&&Date.now()<meet.ann.end){ l1=meet.ann.shown[0]; l2=meet.ann.shown.slice(1).join("\n"); }
-  else if(ph==="day"){ l1="Discuss. Who's lying?"; const e=endsAt(); l2=e?`Vote closes in ${fmt((e-Date.now())/1000)}`:"Tap who you think is Mafia."; }
+  else if(ph==="day"){ l1="Discuss. Who's lying?"; const e=endsAt(); const cc=S.mode==="online-host"?S.players.filter((q,i)=>q.alive&&OVC[i]).length:((V&&V.vote&&V.vote.cc)||0), tt=S.mode==="online-host"?alive().length:((V&&V.vote&&V.vote.total)||0);
+    l2=(e?`Vote closes in ${fmt((e-Date.now())/1000)}`:"Tap who you think is Mafia.")+(tt?` · ${cc}/${tt} confirmed`:""); }
   else if(ph==="vote"){ l1="🗳️ Vote now"; l2="Tap who you think is Mafia."; }
   else if(ph==="bomb"){ l1="💣 Boom!"; l2=""; }
   else if(ph==="end"){ const w=S.mode==="online-host"?S.winner:(V&&V.winner); l1=w==="Town"?"🎉 Town wins!":"🔪 Mafia wins!"; l2=""; }
@@ -741,11 +766,12 @@ function paintSeat(el,d,meeting){
 function roleAudio(){
   let meMafia=false, mates=new Set(), modPid=null, modIsPlayer=false, hostNarrates=false;
   if(S.mode==="online-client"&&V&&V.me){
-    meMafia=V.me.team==="Mafia"; modPid=V.hostPid; modIsPlayer=!!V.hostPlays;
-    V.roster.forEach(r=>{ if((V.me.mates||[]).includes(r.name)) mates.add(r.pid); });
+    const grp=(V.act&&V.act.group||[]).map(g=>g.name);
+    meMafia=V.me.team==="Mafia"||grp.length>0; modPid=V.hostPid; modIsPlayer=!!V.hostPlays;
+    V.roster.forEach(r=>{ if((V.me.mates||[]).includes(r.name)||grp.includes(r.name)) mates.add(r.pid); });
   } else if(S.mode==="online-host"){
     modPid=peer&&peer.id;
-    if(S.hostPlays&&S.phase!=="lobby"){ modIsPlayer=true; const h=S.players.find(p=>p.isHost); meMafia=!!(h&&isMafia(h)); S.players.forEach(p=>{ if(!p.isHost&&isMafia(p)) mates.add(p.pid); }); }
+    if(S.hostPlays&&S.phase!=="lobby"){ modIsPlayer=true; const hi=S.players.findIndex(p=>p.isHost), h=S.players[hi]; const grp=nightGroup(hi); meMafia=!!(h&&isMafia(h))||grp.length>0; grp.forEach(o=>{ if(!o.q.isHost) mates.add(o.q.pid); }); }
     else hostNarrates=true;
   }
   return {meMafia,mates,modPid,modIsPlayer,hostNarrates};
@@ -957,7 +983,7 @@ const A = {
     S.players.forEach(p=>{}); // keep connections
     S.lobby=S.players.filter(p=>!p.isHost).map(p=>({name:p.name,pid:p.pid,bot:p.bot}));
     const keep={code:S.code,lobby:S.lobby,counts:S.counts,auto:S.auto,custom:S.custom,mode:S.mode,useCam:S.useCam,dayLen:S.dayLen,nightLen:S.nightLen,modName:S.modName,hostPlays:S.hostPlays};
-    S=Object.assign(fresh(),keep,{phase:"lobby"}); OR={}; OV={}; ON={kill:{},protect:{},investigate:{},res:{},conf:{}};
+    S=Object.assign(fresh(),keep,{phase:"lobby"}); OR={}; OV={}; OVC={}; ON={kill:{},protect:{},investigate:{},res:{},conf:{}};
     pushAll(); render();
   },
 
@@ -972,6 +998,9 @@ const A = {
   cReady(){ sendAct({t:"ready"}); },
   cConfirm(){ sendAct({t:"confirm"}); },
   cAct(i){ sendAct({t:"act",ability:V.act.ability,choice:+i}); },
+  cVoteConfirm(){ sendAct({t:"vconfirm"}); },
+  nMic(){ A.toggleMic(); render(); },
+  nNarr(){ A.toggleNarr(); render(); },
   cVote(i){ sendAct({t:"vote",choice:i==="none"?"none":+i}); },
   cBomb(i){ sendAct({t:"bomb",choice:+i}); },
   hostSkipBomb(){ if(S.phase!=="bomb") return; S.log.push(`Day ${S.round}: The bomb fizzled out.`); afterElim(); pushAll(); render(); },
@@ -1172,8 +1201,8 @@ function vHostLobby(){
       <div class="row" style="margin-bottom:8px"><button class="btn ghost small" data-a="addBot">🤖 Add a bot</button><button class="btn ghost small" data-a="addBots5">🤖 Add 5 bots</button></div>
       ${n?S.lobby.map((p,i)=>`<div class="alive"><span><span class="dot ${online(p.name)?"on":""}"></span>${esc(p.name)}</span><button class="link" data-a="kick" data-v="${i}">remove</button></div>`).join(""):`<div class="desc">Waiting for relatives to join with the code…</div>`}</div>
     ${rolesCard(n)}
-    <div class="card"><h2>⏱ Discussion timer</h2><select data-f="dayLen">${[[0,"No timer (closes when everyone has voted)"],[60,"1 minute"],[120,"2 minutes"],[180,"3 minutes"],[300,"5 minutes"],[600,"10 minutes"]].map(o=>`<option value="${o[0]}" ${S.dayLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
-      <div class="desc">Voting is open during the whole discussion. It closes when everyone has voted or when time runs out.</div></div>
+    <div class="card"><h2>⏱ Discussion timer</h2><select data-f="dayLen">${[[0,"No timer (closes when everyone confirms)"],[60,"1 minute"],[120,"2 minutes"],[180,"3 minutes"],[300,"5 minutes"],[600,"10 minutes"]].map(o=>`<option value="${o[0]}" ${S.dayLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+      <div class="desc">Voting is open during the whole discussion. The timer keeps running until time is up, or until everyone has confirmed their vote.</div></div>
     <div class="card"><h2>🌙 Night timer</h2><select data-f="nightLen">${[[0,"No timer (wait for everyone)"],[10,"10 seconds"],[15,"15 seconds"],[20,"20 seconds"],[30,"30 seconds"],[45,"45 seconds"],[60,"1 minute"]].map(o=>`<option value="${o[0]}" ${S.nightLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
       <div class="desc">Time each special role gets to choose. Anyone who hasn't chosen is skipped.</div></div>
     <button class="btn" data-a="hostStart" ${err?"disabled":""}>Deal roles &amp; start</button>
@@ -1218,9 +1247,11 @@ function cRoster(showRoles){
     V.roster.map(r=>`<div class="alive"><span style="${r.alive?"":"opacity:.45;text-decoration:line-through"}">${esc(r.name)}${r.name===V.me.name?" (you)":""}</span><span class="${r.role?cls(r.role):""}">${r.role?(r.icon||"")+" "+esc(r.role):""}</span></div>`).join("")+`</div>`;
 }
 function voteCard(vt){
-  return `<div class="card"><h2>🗳 Who is Mafia?</h2>${V.roster.map((r,i)=>`<button class="pick ${vt.targets.includes(i)?"":"dead"} ${vt.chosen===i?"sel":""}" data-a="cVote" data-v="${i}">${esc(r.name)}${((vt.counts||[])[i])?` <span style="float:right">🗳 ${vt.counts[i]}</span>`:""}</button>`).join("")}
-    <button class="pick ${vt.chosen==="none"?"sel":""}" data-a="cVote" data-v="none">🤝 Skip / nobody</button>
-    ${vt.chosen!==null?`<div class="ok center">✓ Vote cast — you can change it until the vote closes.</div>`:""}</div>`;
+  const cf=vt.confirmed;
+  return `<div class="card"><h2>🗳 Who is Mafia?</h2>${V.roster.map((r,i)=>`<button class="pick ${(vt.targets.includes(i)&&!cf)?"":"dead"} ${vt.chosen===i?"sel":""}" ${cf?"":`data-a="cVote" data-v="${i}"`}>${esc(r.name)}${((vt.counts||[])[i])?` <span style="float:right">🗳 ${vt.counts[i]}</span>`:""}</button>`).join("")}
+    <button class="pick ${vt.chosen==="none"?"sel":""} ${cf?"dead":""}" ${cf?"":`data-a="cVote" data-v="none"`}>🤝 Skip / nobody</button>
+    ${cf?`<div class="ok center">✓ Vote confirmed — waiting for the others (${vt.cc}/${vt.total})…</div>`
+        :vt.chosen!==null?`<button class="btn" data-a="cVoteConfirm" style="margin-top:10px">✅ Confirm my vote</button><div class="desc center">You can change it until you confirm. The vote ends when everyone confirms or time runs out.</div>`:""}</div>`;
 }
 function vClient(){
   if(!V) return vConnecting();
@@ -1242,7 +1273,10 @@ function vClient(){
       if(cf) b+=`<div class="ok center">✓ Confirmed — waiting for the others…</div>`;
       else if(V.act.chosen!==null) b+=`<button class="btn" data-a="cConfirm" style="margin-top:10px">✅ Confirm my choice</button><div class="desc center">You can still change it until you confirm.</div>`;
     } else b=`<div class="center"><div class="big">😴</div><div class="desc">Close your eyes. Wait for morning.</div></div>`;
-    return `<div class="topbar"><span>Night ${V.round}</span><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span></div><div class="card"><h2>🌙 Night</h2>${nightBar()}${b}</div>`;
+    const grp=(V.act&&V.act.group)||[];
+    const team=grp.length?`<div class="team"><div class="desc center">🎙 Talk quietly with your team and agree on one choice</div>${grp.map(g=>`<div class="alive"><span>${esc(g.name)}</span><span class="desc">${g.pick?"→ "+esc(g.pick):"…thinking"} ${g.ok?"✅":""}</span></div>`).join("")}</div>`:"";
+    const ctl=`<div class="ctl"><button class="btn ghost small" data-a="nMic">${meet.userMic?"🎤 Mic on":"🎤 Mic off"}</button><button class="btn ghost small" data-a="nNarr">${meet.narr?"🔊 Voice on":"🔊 Voice off"}</button></div>`;
+    return `<div class="nightfs"><div class="moon">🌙</div><h1>Night ${V.round}</h1><div class="center desc" style="margin-bottom:4px"><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span> · eyes closed</div>${nightBar()}${team}<div class="card">${b}</div>${ctl}</div>`;
   }
   if(V.phase==="day"){
     const L=V.last;
@@ -1253,10 +1287,7 @@ function vClient(){
   if(V.phase==="vote"){
     const vt=V.vote;
     if(!m.alive) return `<div class="card center"><h2>Vote in progress</h2><div class="desc">You're out — spectating.</div></div>${cRoster()}`;
-    return `<div class="topbar"><span>Vote — Day ${V.round}</span><span>${vt.voted.length} voted</span></div>
-      <div class="card"><h2>Who is Mafia?</h2>${V.roster.map((r,i)=>`<button class="pick ${vt.targets.includes(i)?"":"dead"} ${vt.chosen===i?"sel":""}" data-a="cVote" data-v="${i}">${esc(r.name)}${((vt.counts||[])[i])?` <span style="float:right">🗳 ${vt.counts[i]}</span>`:""}</button>`).join("")}
-      <button class="pick ${vt.chosen==="none"?"sel":""}" data-a="cVote" data-v="none">🤝 Skip / nobody</button>
-      ${vt.chosen!==null?`<div class="ok center">✓ Vote cast — you can change it until the vote closes.</div>`:""}</div>`;
+    return `<div class="topbar"><span>Vote — Day ${V.round}</span><span>${vt.voted.length} voted</span></div>${voteCard(vt)}`;
   }
   if(V.phase==="bomb"){
     const b=V.bomb;
@@ -1364,5 +1395,5 @@ window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){
   try{ const p=snd.play(); if(p&&p.then) p.then(start).catch(()=>{}); }catch(e){}
 })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v23 · auto-flip card</div></body>
+<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v24 · full-screen night + vote confirm</div></body>
 </html>
