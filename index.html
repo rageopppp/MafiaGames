@@ -278,24 +278,35 @@ function fakeStream(label){
     return c.captureStream(2);
   }catch(e){ return null; }
 }
+/* STUN finds the shortest path between phones; the TURN relay is a fallback for strict networks (mobile data, some Wi-Fi). */
+const ICE={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"},
+  {urls:["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443","turn:openrelay.metered.ca:443?transport=tcp"],username:"openrelayproject",credential:"openrelayproject"}]};
+let mediaP=Promise.resolve(), connTimer=null;
+const INAPP=/FBAN|FBAV|Instagram|Snapchat|TikTok|musical_ly|Line\/|; wv\)|WhatsApp/i.test(navigator.userAgent||"");
 async function initMedia(label){
   if(meet.local) return;
   if(S.useCam){
     if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
-      try{ meet.local=await navigator.mediaDevices.getUserMedia({video:{width:320,height:240,facingMode:"user"},audio:true}); meet.hasCam=true; return; }
-      catch(e){ S.camErr="Camera/mic unavailable ("+(e.name||"error")+"). Joining without video."; }
-    } else S.camErr="Camera needs a secure (https) page. Joining without video.";
+      S.camMsg="Allow camera & mic if your browser asks…"; if(S.phase==="connecting") render();
+      try{
+        // never wait forever on the permission prompt
+        meet.local=await Promise.race([navigator.mediaDevices.getUserMedia({video:{width:320,height:240,facingMode:"user"},audio:true}),
+                                       new Promise((_,rej)=>setTimeout(()=>rej({name:"Timeout"}),12000))]);
+        meet.hasCam=true; S.camMsg=""; return;
+      }catch(e){ S.camErr=e&&e.name==="Timeout"?"The camera didn't respond, so you joined without video.":"Camera/mic unavailable ("+((e&&e.name)||"error")+"). Joining without video."; }
+    } else S.camErr="Camera needs a secure (https) page and a real browser. Joining without video.";
   }
+  S.camMsg="";
   meet.local=fakeStream(label);
 }
 function snd(name,msg){ const c=conns[key(name)]; if(c&&c.open){ try{ c.send(msg); }catch(e){} } }
-function online(name){ const c=conns[key(name)]; return !!(c&&c.open); }
+function online(name){ const c=conns[key(name)]; if(c&&c.open) return true; const r=roster().find(p=>p.name===name); return !!(r&&(r.bot||r.isHost)); }
 
 /* ---- host side ---- */
 function startHost(tries){
   const code=genCode();
-  peer=new Peer("fmafia-"+code);
-  peer.on("open",id=>{ S.code=code; S.phase="lobby"; S.lobby=[]; render(); });
+  peer=new Peer("fmafia-"+code,{config:ICE});
+  peer.on("open",id=>{ S.code=code; S.phase="lobby"; S.lobby=[]; if(S.practice){ S.practice=false; addBots(5); } else render(); });
   peer.on("error",e=>{
     if(e.type==="unavailable-id" && tries<6){ try{peer.destroy();}catch(_){} startHost(tries+1); }
     else { S.err="Connection problem: "+(e.type||e.message); S.phase="home"; S.mode=null; render(); }
@@ -315,6 +326,36 @@ function dropPlayer(c){
   }
   pushAll(); render();
 }
+const BOTNAMES=["Ayesha","Bilal","Danish","Farah","Hamza","Iqra","Junaid","Kiran","Laiba","Moiz","Nida","Osama","Rabia","Saad","Tania"];
+function addBots(n){
+  for(let k=0;k<n;k++){
+    if(S.lobby.length+(S.hostPlays?1:0)>=20) break;
+    const nm=BOTNAMES.find(x=>!S.lobby.some(p=>p.name==="🤖 "+x)&&key(S.modName)!==key("🤖 "+x)); if(!nm) break;
+    S.lobby.push({name:"🤖 "+nm,pid:null,bot:true});
+  }
+  if(S.auto) S.counts=suggest(nPlayers());
+  pushAll(); render();
+}
+/* Computer players for practice: they ready up, use their night powers and vote on their own. */
+function runBots(){
+  if(S.mode!=="online-host"||!S.players.length) return;
+  const ph=S.phase, opts=(i,noMafia)=>S.players.map((q,j)=>(q.alive&&j!==i&&!(noMafia&&isMafia(q)))?j:-1).filter(j=>j>=0);
+  S.players.forEach((p,i)=>{
+    if(!p.bot||rnd(100)>45) return;
+    if(ph==="reveal"&&!OR[i]) handleAction(i,{t:"ready"});
+    else if(ph==="night"&&p.alive){
+      const ab=actAbility(p); if(!ab||ON[ab][i]!==undefined) return;
+      let t=allowedTargets(p,i,ab);
+      if(ab==="kill"){ const prev=Object.values(ON.kill); if(prev.length&&rnd(100)<80) t=[prev[0]]; }
+      if(t.length) handleAction(i,{t:"act",ability:ab,choice:t[rnd(t.length)]});
+    }
+    else if(ph==="vote"&&p.alive&&OV[i]===undefined){
+      const o=opts(i,isMafia(p)); handleAction(i,{t:"vote",choice:(!o.length||rnd(100)<10)?"none":o[rnd(o.length)]});
+    }
+    else if(ph==="bomb"&&i===S.bombIdx){ const o=opts(i,false); if(o.length) handleAction(i,{t:"bomb",choice:o[rnd(o.length)]}); }
+  });
+}
+setInterval(runBots,1200);
 function roster(){ return S.phase==="lobby" ? S.lobby : S.players; }
 function hostMsg(c,m){
   if(!m||typeof m!=="object") return;
@@ -438,17 +479,26 @@ function pushAll(){
 }
 
 /* ---- client side ---- */
+function connFail(msg){ clearTimeout(connTimer); S.err=msg; leave(true); }
 function connectClient(){
+  if(S.phase==="connecting"){ S.connMsg="Finding the room…"; render(); }
+  clearTimeout(connTimer);
+  connTimer=setTimeout(()=>{ if(S.phase!=="client") connFail("Couldn't connect to the room. Check the code, make sure the moderator's page is still open, and try again — switching between Wi-Fi and mobile data can help."); },25000);
   conn=peer.connect("fmafia-"+S.joinCode,{reliable:true});
-  conn.on("open",()=>{ conn.send({t:"join",name:S.joinName}); });
-  conn.on("data",m=>{
-    if(m.t==="view"){ V=m.v; V.endsAt=V.dayLeft!=null?Date.now()+V.dayLeft*1000:0; S.phase="client"; S.err=""; render(); }
-    else if(m.t==="error"){ S.err=m.msg; leave(true); }
+  conn.on("open",async()=>{
+    if(S.phase==="connecting"){ S.connMsg="Joining the room…"; render(); }
+    try{ await mediaP; }catch(e){}
+    try{ conn.send({t:"join",name:S.joinName}); }catch(e){}
   });
-  conn.on("close",()=>{ if(S.mode==="online-client"){ S.err="Connection lost — reconnecting…"; render(); setTimeout(()=>{ if(S.mode==="online-client" && peer && !peer.destroyed) connectClient(); },3000); } });
+  conn.on("data",m=>{
+    if(m.t==="view"){ clearTimeout(connTimer); V=m.v; V.endsAt=V.dayLeft!=null?Date.now()+V.dayLeft*1000:0; S.phase="client"; S.err=""; render(); }
+    else if(m.t==="error"){ clearTimeout(connTimer); S.err=m.msg; leave(true); }
+  });
+  conn.on("close",()=>{ if(S.mode==="online-client"&&S.phase==="client"){ S.err="Connection lost — reconnecting…"; render(); setTimeout(()=>{ if(S.mode==="online-client" && peer && !peer.destroyed) connectClient(); },3000); } });
   conn.on("error",()=>{});
 }
 function leave(toJoin){
+  clearTimeout(connTimer);
   Object.values(meet.calls).forEach(c=>{try{c.close();}catch(e){}}); meet.calls={};
   Object.keys(meet.seats).forEach(k=>{ meet.seats[k].remove(); delete meet.seats[k]; }); meet.streams={}; meet.lastCam=null; camMap={};
   if(meet.local && meet.hasCam){ meet.local.getTracks().forEach(t=>t.stop()); meet.local=null; meet.hasCam=false; }
@@ -725,6 +775,9 @@ setInterval(()=>{
 const A = {
   /* ---- home ---- */
   setCam(){ S.useCam=!S.useCam; },
+  hostPractice(){ S.practice=true; S.hostPlays=true; return A.hostOnline(); },
+  addBot(){ addBots(1); },
+  addBots5(){ addBots(5); },
   goPass(){ S.mode="pass"; S.phase="setup"; S.err=""; render(); },
   goJoin(){ S.phase="join"; S.err=""; render(); },
   goHome(){ S.phase="home"; S.err=""; render(); },
@@ -732,24 +785,28 @@ const A = {
     const mn=val("mn").trim().slice(0,20); if(mn) S.modName=mn;
     S.mode="online-host"; S.phase="connecting"; S.err=""; render();
     await initMedia(S.modName);
-    loadPeer(()=>startHost(0));
+    loadPeer(()=>{ if(S.mode==="online-host"&&S.phase==="connecting") startHost(0); });
   },
   async join(){
     const code=val("jc").trim().toUpperCase(), name=val("jn").trim();
     if(!code||!name){ S.err="Enter the room code and your name."; return render(); }
-    S.joinCode=code; S.joinName=name; S.err=""; S.mode="online-client"; S.phase="connecting"; render();
+    S.joinCode=code; S.joinName=name; S.err=""; S.camErr=""; S.mode="online-client"; S.phase="connecting"; S.connMsg="Starting…"; render();
     try{ localStorage.setItem("fm-name",name); }catch(e){}
-    await initMedia(name);
+    mediaP=initMedia(name);                       // camera runs alongside connecting, never blocks it
     loadPeer(()=>{
-      peer=new Peer();
-      peer.on("open",()=>connectClient());
+      if(S.mode!=="online-client"||S.phase!=="connecting") return;      // cancelled meanwhile
+      S.connMsg="Reaching the connection service…"; render();
+      connTimer=setTimeout(()=>{ if(S.phase==="connecting") connFail("Couldn't reach the connection service. Check your internet and try again."); },15000);
+      peer=new Peer(undefined,{config:ICE});
+      peer.on("open",()=>{ clearTimeout(connTimer); if(!peer||S.mode!=="online-client"||S.phase!=="connecting") return; connectClient(); });
       peer.on("call",onCall);
       peer.on("error",e=>{
-        if(e.type==="peer-unavailable"){ S.err="Room not found. Check the code (and that the moderator's page is still open)."; leave(true); }
-        else if(S.phase==="connecting"){ S.err="Connection problem: "+(e.type||e.message); leave(true); }
+        if(e.type==="peer-unavailable"){ connFail("Room not found. Check the code (and that the moderator's page is still open)."); }
+        else if(S.phase==="connecting"){ connFail("Connection problem: "+(e.type||e.message)); }
       });
     });
   },
+  cancelConn(){ const client=S.mode==="online-client"; S.err=""; clearTimeout(connTimer); leave(client); },
   toggleCam(){ meet.userCam=!meet.userCam; updateMeet(); },
   toggleMic(){ meet.userMic=!meet.userMic; updateMeet(); },
   toggleNarr(){ meet.narr=!meet.narr; if(!meet.narr){ try{ window.speechSynthesis.cancel(); }catch(e){} } updateMeet(); },
@@ -822,10 +879,10 @@ const A = {
   /* ---- online host ---- */
   hostStart(){
     const n=nPlayers(); if(validate(n)) return;
-    const names=S.lobby.map(p=>p.name), pids=S.lobby.map(p=>p.pid);
-    if(S.hostPlays){ names.unshift(S.modName); pids.unshift(peer.id); }
+    const names=S.lobby.map(p=>p.name), pids=S.lobby.map(p=>p.pid), bots=S.lobby.map(p=>!!p.bot);
+    if(S.hostPlays){ names.unshift(S.modName); pids.unshift(peer.id); bots.unshift(false); }
     const dealt=dealRoles(names);
-    S.players=dealt.map((p,i)=>Object.assign(p,{pid:pids[i],isHost:!!(S.hostPlays&&i===0)}));
+    S.players=dealt.map((p,i)=>Object.assign(p,{pid:pids[i],isHost:!!(S.hostPlays&&i===0),bot:bots[i]}));
     S.phase="reveal"; S.round=0; S.log=[]; S.winner=null; OR={}; pushAll(); render();
   },
   hostStartNight(){ beginNightCore(); pushAll(); render(); },
@@ -835,7 +892,7 @@ const A = {
   hostBomb(i){ if(S.phase!=="bomb") return; applyBomb(+i); pushAll(); render(); },
   hostLobby(){
     S.players.forEach(p=>{}); // keep connections
-    S.lobby=S.players.filter(p=>!p.isHost).map(p=>({name:p.name,pid:p.pid}));
+    S.lobby=S.players.filter(p=>!p.isHost).map(p=>({name:p.name,pid:p.pid,bot:p.bot}));
     const keep={code:S.code,lobby:S.lobby,counts:S.counts,auto:S.auto,custom:S.custom,mode:S.mode,useCam:S.useCam,dayLen:S.dayLen,modName:S.modName,hostPlays:S.hostPlays};
     S=Object.assign(fresh(),keep,{phase:"lobby"}); OR={}; OV={}; ON={kill:{},protect:{},investigate:{},res:{}};
     pushAll(); render();
@@ -893,8 +950,9 @@ function rolesCard(n){
 
 function vHome(){
   return `<h1>🎭 Sangat Mafia Nights</h1><p class="sub">Private family game night — moderator, role dealer &amp; face-cam meetings.</p>
-    ${errBox()}
+    ${errBox()}${INAPP?`<div class="card warn">⚠️ You seem to be inside an app’s built-in browser (WhatsApp, Instagram…), where the camera and connection often fail. Tap the ⋮ or Share button and choose <b>Open in Chrome</b> / <b>Open in Safari</b>.</div>`:""}
     <button class="btn" data-a="goPass">📱 One phone — pass it around</button>
+    <button class="btn ghost" data-a="hostPractice">🧪 Practice alone — play against computer players</button>
     <div class="card">
       <h2>🌐 Online room with video</h2>
       <p class="desc">Everyone joins from their own phone. Cameras are on during day meetings and off at night.</p>
@@ -907,14 +965,17 @@ function vHome(){
 }
 function vJoin(){
   let nm=""; try{ nm=localStorage.getItem("fm-name")||""; }catch(e){}
-  return `<h1>Join a room</h1>${errBox()}
+  return `<h1>Join a room</h1>${errBox()}${INAPP?`<div class="card warn">⚠️ You seem to be inside an app’s built-in browser (WhatsApp, Instagram…), where the camera and connection often fail. Tap the ⋮ or Share button and choose <b>Open in Chrome</b> / <b>Open in Safari</b>.</div>`:""}
     <div class="card"><input type="text" id="jc" placeholder="Room code" maxlength="5" autocapitalize="characters" value="${esc(S.joinCode)}" style="text-transform:uppercase;letter-spacing:.3em;text-align:center;font-size:24px">
       <input type="text" id="jn" placeholder="Your name" maxlength="20" value="${esc(S.joinName||nm)}">
       <label class="chk"><input type="checkbox" data-f="cam" ${S.useCam?"checked":""}> Use my camera &amp; mic</label>
       <button class="btn" data-a="join">Join</button></div>
     <div class="center"><button class="link" data-a="goHome">← Back</button></div>`;
 }
-function vConnecting(){ return `<div class="card center" style="padding:40px 16px"><div class="loader"><i></i><i></i><i></i></div><div>Connecting…</div><div class="desc">If your browser asks for camera &amp; mic, tap Allow.</div></div>${S.camErr?`<div class="warn center">${esc(S.camErr)}</div>`:""}`; }
+function vConnecting(){ return `<div class="card center" style="padding:34px 16px"><div class="loader"><i></i><i></i><i></i></div><div>Connecting…</div>
+  ${S.connMsg?`<div class="desc" style="margin-top:6px">${esc(S.connMsg)}</div>`:""}${S.camMsg?`<div class="desc">${esc(S.camMsg)}</div>`:""}
+  <div class="desc" style="margin-top:14px">Stuck? Open the link in Chrome or Safari (not inside WhatsApp or Instagram), or go back and untick “Use my camera”.</div>
+  <button class="btn ghost small" data-a="cancelConn" style="margin-top:12px">Cancel</button></div>${S.camErr?`<div class="warn center">${esc(S.camErr)}</div>`:""}`; }
 
 function vSetup(){
   const n=S.names.length, err=validate(n);
@@ -1043,6 +1104,7 @@ function vHostLobby(){
     <div class="card"><h2>You, the moderator</h2><input type="text" data-f="modName" value="${esc(S.modName)}" maxlength="20" placeholder="Your name">
       <label class="chk"><input type="checkbox" data-f="hostPlays" ${S.hostPlays?"checked":""}> I'm playing too (you get a secret role and the app runs the game)</label></div>
     <div class="card"><h2>Players <span class="pill">${n}</span></h2>
+      <div class="row" style="margin-bottom:8px"><button class="btn ghost small" data-a="addBot">🤖 Add a bot</button><button class="btn ghost small" data-a="addBots5">🤖 Add 5 bots</button></div>
       ${n?S.lobby.map((p,i)=>`<div class="alive"><span><span class="dot ${online(p.name)?"on":""}"></span>${esc(p.name)}</span><button class="link" data-a="kick" data-v="${i}">remove</button></div>`).join(""):`<div class="desc">Waiting for relatives to join with the code…</div>`}</div>
     ${rolesCard(n)}
     <div class="card"><h2>⏱ Discussion timer</h2><select data-f="dayLen">${[[0,"No timer (narrator opens the vote)"],[60,"1 minute"],[120,"2 minutes"],[180,"3 minutes"],[300,"5 minutes"],[600,"10 minutes"]].map(o=>`<option value="${o[0]}" ${S.dayLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
