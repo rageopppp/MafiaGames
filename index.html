@@ -114,6 +114,14 @@
   .nightfs .team{border:1px dashed #6f86e0;border-radius:12px;padding:10px;margin:10px 0}
   .nightfs .ctl{display:flex;gap:8px;justify-content:center;margin:8px 0}
   .nightfs .ctl button{width:auto;padding:8px 14px;font-size:14px}
+  body.isnight #table{filter:brightness(.55) saturate(.65);transition:filter .6s}
+  body.isnight #tlamp{opacity:.25}
+  .ncard{padding:10px 12px;margin:6px 0}
+  .ncard .nbar{margin:2px 0 2px}
+  .ncard .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .ncard .pick{margin:0;padding:10px 10px;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ncard .btn{margin:8px 0 2px;padding:12px}
+  .ncard .team{border:1px dashed #7a4a4a;border-radius:10px;padding:6px 8px;margin:6px 0}
   @keyframes kb{from{transform:scale(1)}to{transform:scale(1.16)}}
   @keyframes breathe{from{filter:brightness(.95) contrast(1)}to{filter:brightness(1.14) contrast(1.06)}}
   .glow{position:absolute;width:20%;height:20%;border-radius:50%;pointer-events:none;mix-blend-mode:screen;opacity:.35;
@@ -823,7 +831,7 @@ function updateMeet(){
   const RA=roleAudio(), canWhisper=(ph==="night")&&RA.meMafia&&iAmAlive()&&!RA.hostNarrates, canNarrate=RA.hostNarrates&&(ph==="night"||ph==="reveal");
   note.textContent = !iAmAlive()?"👻 You're out — everyone can still see you, but you can't talk.":
     (canNarrate?"🎙 You're live to everyone — narrate the night (e.g. “Mafia, open your eyes…”).":
-    canWhisper?"🔪 Whisper to your Mafia team — only they can hear you.":
+    canWhisper?"🤫 Talk quietly with your team — only they can hear you.":
     (big&&meeting?"Over 10 players: video is off to keep voices smooth — avatars shown.":""));
   ctl.style.display=(meeting||canWhisper||canNarrate)?"flex":"none";
   document.getElementById("bcam").style.display=meeting?"":"none";
@@ -1269,14 +1277,13 @@ function vClient(){
       const ab=V.act.ability;
       const prompt={kill:"Choose who the Mafia eliminate tonight."+(m.mates.length?` (Agree with ${m.mates.map(esc).join(", ")}!)`:""),protect:"Choose who to protect tonight.",investigate:"Choose who to investigate."}[ab];
       const cf=V.act.confirmed;
-      b=`<p>${prompt}</p>`+V.roster.map((r,i)=>`<button class="pick ${(V.act.targets.includes(i)&&!cf)?"":"dead"} ${V.act.chosen===i?"sel":""}" ${cf?"":`data-a="cAct" data-v="${i}"`}>${esc(r.name)}</button>`).join("");
+      b=`<p class="desc" style="margin:4px 0 6px">${prompt}</p><div class="pgrid">`+V.roster.map((r,i)=>`<button class="pick ${(V.act.targets.includes(i)&&!cf)?"":"dead"} ${V.act.chosen===i?"sel":""}" ${cf?"":`data-a="cAct" data-v="${i}"`}>${esc(r.name)}</button>`).join("")+`</div>`;
       if(cf) b+=`<div class="ok center">✓ Confirmed — waiting for the others…</div>`;
       else if(V.act.chosen!==null) b+=`<button class="btn" data-a="cConfirm" style="margin-top:10px">✅ Confirm my choice</button><div class="desc center">You can still change it until you confirm.</div>`;
     } else b=`<div class="center"><div class="big">😴</div><div class="desc">Close your eyes. Wait for morning.</div></div>`;
     const grp=(V.act&&V.act.group)||[];
-    const team=grp.length?`<div class="team"><div class="desc center">🎙 Talk quietly with your team and agree on one choice</div>${grp.map(g=>`<div class="alive"><span>${esc(g.name)}</span><span class="desc">${g.pick?"→ "+esc(g.pick):"…thinking"} ${g.ok?"✅":""}</span></div>`).join("")}</div>`:"";
-    const ctl=`<div class="ctl"><button class="btn ghost small" data-a="nMic">${meet.userMic?"🎤 Mic on":"🎤 Mic off"}</button><button class="btn ghost small" data-a="nNarr">${meet.narr?"🔊 Voice on":"🔊 Voice off"}</button></div>`;
-    return `<div class="nightfs"><div class="moon">🌙</div><h1>Night ${V.round}</h1><div class="center desc" style="margin-bottom:4px"><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span> · eyes closed</div>${nightBar()}${team}<div class="card">${b}</div>${ctl}</div>`;
+    const team=grp.length?`<div class="team"><div class="desc center" style="font-size:12px">🎙 Talk with your team — agree on one choice</div>${grp.map(g=>`<div class="alive" style="padding:3px 0"><span>${esc(g.name)}</span><span class="desc">${g.pick?"→ "+esc(g.pick):"…thinking"} ${g.ok?"✅":""}</span></div>`).join("")}</div>`:"";
+    return `<div class="topbar" style="margin:2px 0"><span>🌙 Night ${V.round}</span><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span></div><div class="card ncard">${nightBar()}${team}${b}</div>`;
   }
   if(V.phase==="day"){
     const L=V.last;
@@ -1313,6 +1320,7 @@ function resetBar(){
 let lastKey="";
 function render(keepFocus){
   if(curPhase()!=="reveal"){ FL=false; AF=false; }
+  document.body.classList.toggle("isnight",curPhase()==="night");
   const ae=document.activeElement, focusKey=ae&&(ae.id||ae.dataset.f), selStart=ae&&ae.selectionStart;
   let html;
   if(S.mode==="online-client") html=S.phase==="client"?vClient():(S.phase==="join"?vJoin():vConnecting());
@@ -1395,5 +1403,5 @@ window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){
   try{ const p=snd.play(); if(p&&p.then) p.then(start).catch(()=>{}); }catch(e){}
 })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v24 · full-screen night + vote confirm</div></body>
+<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v25 · night on the table</div></body>
 </html>
