@@ -86,6 +86,20 @@
   #simg{width:100%;height:100%;display:block;object-fit:cover}
   #splash.play #zoomer{animation:kb var(--dur,5.5s) cubic-bezier(.25,.1,.25,1) forwards}
   #splash.play #simg{animation:breathe 1.1s ease-in-out infinite alternate}
+  .flipwrap{perspective:1000px}
+  .fci{display:grid;transform-style:preserve-3d;transition:transform .85s cubic-bezier(.3,.7,.2,1);cursor:pointer}
+  .flipwrap.on .fci{transform:rotateY(180deg)}
+  .ff,.fb{grid-area:1/1;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:16px}
+  .fb{transform:rotateY(180deg);padding:18px 10px}
+  .ff{min-height:290px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+    background:repeating-linear-gradient(45deg,#4a0b0b 0 10px,#380808 10px 20px);border:2px solid #b8860b;box-shadow:inset 0 0 0 6px #1a0707,0 6px 24px #0008;color:#f1d28a}
+  .ff .fq{font-size:64px;filter:drop-shadow(0 2px 6px #000)}
+  .ff .ft{font-weight:700;letter-spacing:.5px}
+  .after{transition:opacity .4s .6s}
+  .flipwrap:not(.on) .after{opacity:0;pointer-events:none}
+  .nbar{height:8px;border-radius:6px;background:#2a1515;overflow:hidden;margin:6px 0 4px}
+  .nbar i{display:block;height:100%;width:100%;transform-origin:left;animation:nshrink linear forwards}
+  @keyframes nshrink{0%{transform:scaleX(1);background:#3fa66b}60%{background:#d9a441}85%,100%{background:#d33}to{transform:scaleX(0)}}
   @keyframes kb{from{transform:scale(1)}to{transform:scale(1.16)}}
   @keyframes breathe{from{filter:brightness(.95) contrast(1)}to{filter:brightness(1.14) contrast(1.06)}}
   .glow{position:absolute;width:20%;height:20%;border-radius:50%;pointer-events:none;mix-blend-mode:screen;opacity:.35;
@@ -163,7 +177,7 @@ function fresh(){
     players:[], revealIdx:0, revealShown:false, round:0, steps:[], stepIdx:0,
     night:{kill:null,protect:null,investigate:null}, detResult:null, lastNight:null, voteSel:null, bombSel:null, bombIdx:null,
     winner:null, log:[], peek:false, confirmReset:false, useCam:true, err:"", camErr:"",
-    code:"", lobby:[], joinCode:"", joinName:"", dayLen:120, dayEnds:0, modName:"Moderator", hostPlays:false};
+    code:"", lobby:[], joinCode:"", joinName:"", dayLen:120, dayEnds:0, nightLen:20, nightEnds:0, modName:"Moderator", hostPlays:false};
 }
 function defs(){
   if(S.mode==="online-client" && V && V.defs) return V.defs;
@@ -221,7 +235,7 @@ function checkWin(){
   if(m>=t) return "Mafia";
   return null;
 }
-let ON={kill:{},protect:{},investigate:{},res:{}}, OV={}, OR={}, nightTimer=null;
+let ON={kill:{},protect:{},investigate:{},res:{}}, OV={}, OR={}, nightTimer=null, FL=false;
 
 function beginNightCore(){
   S.round++; S.phase="night";
@@ -230,7 +244,7 @@ function beginNightCore(){
   S.steps=["kill","protect","investigate"].filter(a=>abs.has(a));
   S.stepIdx=0; S.night={kill:null,protect:null,investigate:null}; S.detResult=null; S.peek=false;
   ON={kill:{},protect:{},investigate:{},res:{}}; OV={}; S.voteSel=null;
-  if(S.mode==="online-host") checkNightDone();
+  if(S.mode==="online-host"){ S.nightEnds=S.nightLen?Date.now()+S.nightLen*1000:0; checkNightDone(); }
 }
 function applyNight(victim, protects, inv){
   inv=inv||[];
@@ -453,6 +467,7 @@ function plurality(vals){
 function resolveOnlineNight(){
   if(nightTimer){ clearTimeout(nightTimer); nightTimer=null; }
   const victim=plurality(Object.values(ON.kill));
+  S.nightEnds=0;
   applyNight(victim, Object.values(ON.protect), Object.values(ON.res));
   S.dayEnds=(S.phase==="day"&&S.dayLen)?Date.now()+S.dayLen*1000:0;
   pushAll(); render();
@@ -479,11 +494,11 @@ function viewFor(idx){
     log:S.log, winner:S.winner,
     last:S.lastNight?{killed:S.lastNight.killed!==null?{name:S.players[S.lastNight.killed].name,role:S.players[S.lastNight.killed].role}:null,saved:S.lastNight.saved,doc:S.lastNight.doc,det:S.lastNight.det}:null};
   if(S.phase==="day"&&S.dayEnds) v.dayLeft=Math.max(0,Math.round((S.dayEnds-Date.now())/1000));
+  if(S.phase==="night"&&S.nightEnds){ v.nightLeft=Math.max(0,Math.round((S.nightEnds-Date.now())/1000)); v.nightTotal=S.nightLen; }
   if(S.phase==="reveal") v.ready=!!OR[idx];
   if(S.phase==="night" && p.alive){
     const ab=actAbility(p);
-    if(ab) v.act={ability:ab, targets:allowedTargets(p,idx,ab), chosen:ON[ab][idx]===undefined?null:ON[ab][idx],
-                  result:ON.res[idx]===undefined?null:ON.res[idx]};
+    if(ab) v.act={ability:ab, targets:allowedTargets(p,idx,ab), chosen:ON[ab][idx]===undefined?null:ON[ab][idx]};
   }
   if(S.phase==="vote"){
     v.vote={chosen:OV[idx]===undefined?null:OV[idx], voted:S.players.filter((q,i)=>OV[i]!==undefined).map(q=>q.name),
@@ -512,7 +527,7 @@ function connectClient(){
     try{ conn.send({t:"join",name:S.joinName}); }catch(e){}
   });
   conn.on("data",m=>{
-    if(m.t==="view"){ clearTimeout(connTimer); V=m.v; V.endsAt=V.dayLeft!=null?Date.now()+V.dayLeft*1000:0; S.phase="client"; S.err=""; render(); }
+    if(m.t==="view"){ clearTimeout(connTimer); V=m.v; V.endsAt=V.dayLeft!=null?Date.now()+V.dayLeft*1000:0; V.nEnds=V.nightLeft!=null?Date.now()+V.nightLeft*1000:0; S.phase="client"; S.err=""; render(); }
     else if(m.t==="error"){ clearTimeout(connTimer); S.err=m.msg; leave(true); }
   });
   conn.on("close",()=>{ if(S.mode==="online-client"&&S.phase==="client"){ S.err="Connection lost — reconnecting…"; render(); setTimeout(()=>{ if(S.mode==="online-client" && peer && !peer.destroyed) connectClient(); },3000); } });
@@ -586,11 +601,14 @@ function cue(kind){
     o.connect(v); v.connect(a.destination); o.start(now+t); o.stop(now+t+d+0.05); }catch(e){} };
   if(kind==="kill"){ T(110,0,.9,"sawtooth",.22); T(82,.25,1,"sine",.3); }
   else if(kind==="good"){ T(660,0,.25,"sine",.25); T(880,.15,.25,"sine",.25); T(1320,.3,.45,"sine",.2); }
+  else if(kind==="tick") T(900,0,.07,"square",.05);
+  else if(kind==="flip"){ T(300,0,.14,"triangle",.14); T(620,.07,.18,"triangle",.1); }
   else if(kind==="bad"){ T(220,0,.35,"square",.1); T(160,.2,.5,"square",.1); }
   else T(520,0,.6,"sine",.15);
 }
 function speak(t){
   if(!meet.narr) return;
+  t=String(t).replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/gu,"").replace(/\s+/g," ").trim(); if(!t) return;
   try{ const u=new SpeechSynthesisUtterance(t); u.rate=0.95; u.lang="en-US"; window.speechSynthesis.speak(u); }catch(e){}
 }
 function announce(info){
@@ -649,6 +667,18 @@ function seatData(){
   return {list,mod};
 }
 function fmt(sec){ sec=Math.max(0,Math.round(sec)); return Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0"); }
+function nightEndsAt(){ return S.mode==="online-host" ? S.nightEnds : (V&&V.nEnds)||0; }
+function nightBar(){
+  const e=nightEndsAt(); if(!e) return "";
+  const total=(S.mode==="online-host"?S.nightLen:(V&&V.nightTotal))||20, left=Math.max(0,(e-Date.now())/1000);
+  return `<div class="nbar"><i style="animation-duration:${total}s;animation-delay:-${Math.max(0,total-left).toFixed(2)}s"></i></div><div class="center desc" style="margin-bottom:8px">⏳ <span id="ncount">${Math.ceil(left)}</span>s to choose</div>`;
+}
+function spoken(name){
+  const c=String(name||"").replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/gu,"").replace(/\s+/g," ").trim();
+  if(c) return c;
+  const list=S.mode==="online-client"?((V&&V.roster)||[]):S.players, i=list.findIndex(r=>r.name===name);
+  return "Player "+(i+1||"");
+}
 function endsAt(){ return S.mode==="online-host" ? S.dayEnds : (V&&V.endsAt)||0; }
 function tcount(list,ph){ let n=list.length; if(ph==="lobby"&&((S.mode==="online-host"&&S.hostPlays)||(S.mode==="online-client"&&V&&V.hostPlays))) n++; return n; }
 function updateCenter(n){
@@ -656,7 +686,7 @@ function updateCenter(n){
   let l1="",l2="";
   if(ph==="lobby"){ l1=`${n} at the table.`; l2=S.mode==="online-host"?"Deal roles when everyone's here.":"Waiting for the narrator to start…"; }
   else if(ph==="reveal"){ l1="🤫 Roles dealt"; l2="Check your phone privately."; }
-  else if(ph==="night"){ l1=`🌙 Night ${round}`; l2="Eyes closed. Cameras off."; }
+  else if(ph==="night"){ l1=`🌙 Night ${round}`; const ne=nightEndsAt(); l2=ne?`Eyes closed. ${Math.max(0,Math.ceil((ne-Date.now())/1000))}s left`:"Eyes closed. Cameras off."; }
   else if(ph==="day"&&meet.ann&&meet.ann.shown.length&&Date.now()<meet.ann.end){ l1=meet.ann.shown[0]; l2=meet.ann.shown.slice(1).join("\n"); }
   else if(ph==="day"){ l1="Discuss. Who's lying?"; const e=endsAt(); l2=e?`Voting starts in ${fmt((e-Date.now())/1000)}`:"The narrator will open the vote."; }
   else if(ph==="vote"){ l1="🗳️ Vote now"; l2="Tap who you think is Mafia."; }
@@ -789,6 +819,8 @@ window.addEventListener("pagehide",()=>{ try{ if(S.mode==="online-client"&&conn&
 try{ new ResizeObserver(relayout).observe(document.getElementById("table")); }catch(e){}
 setInterval(()=>{
   if(S.mode==="online-host"&&S.phase==="day"&&S.dayEnds&&Date.now()>=S.dayEnds){ S.dayEnds=0; A.hostToVote(); return; }
+  if(S.mode==="online-host"&&S.phase==="night"&&S.nightEnds&&Date.now()>=S.nightEnds){ resolveOnlineNight(); return; }
+  if(curPhase()==="night"){ const ne=nightEndsAt(); if(ne){ const s=Math.max(0,Math.ceil((ne-Date.now())/1000)), el=document.getElementById("ncount"); if(el) el.textContent=s; if(s>0&&s<=5) cue("tick"); } }
   if(S.mode&&S.mode.startsWith("online")){ const {list}=seatData(); if(peer&&peer.id) updateCenter(tcount(list,curPhase())); }
 },1000);
 
@@ -860,8 +892,9 @@ const A = {
     S.players=dealRoles(S.names);
     S.phase="reveal"; S.revealIdx=0; S.revealShown=false; S.round=0; S.log=[]; S.winner=null; render();
   },
-  showRole(){ S.revealShown=true; render(); },
-  nextReveal(){
+  showRole(){ FL=false; S.revealShown=true; render(); },
+  flip(){ FL=!FL; const w=document.querySelector(".flipwrap"); if(w) w.classList.toggle("on",FL); cue("flip"); },
+  nextReveal(){ FL=false;
     S.revealShown=false; S.revealIdx++;
     if(S.revealIdx>=S.players.length) beginNightCore();
     render();
@@ -914,7 +947,7 @@ const A = {
   hostLobby(){
     S.players.forEach(p=>{}); // keep connections
     S.lobby=S.players.filter(p=>!p.isHost).map(p=>({name:p.name,pid:p.pid,bot:p.bot}));
-    const keep={code:S.code,lobby:S.lobby,counts:S.counts,auto:S.auto,custom:S.custom,mode:S.mode,useCam:S.useCam,dayLen:S.dayLen,modName:S.modName,hostPlays:S.hostPlays};
+    const keep={code:S.code,lobby:S.lobby,counts:S.counts,auto:S.auto,custom:S.custom,mode:S.mode,useCam:S.useCam,dayLen:S.dayLen,nightLen:S.nightLen,modName:S.modName,hostPlays:S.hostPlays};
     S=Object.assign(fresh(),keep,{phase:"lobby"}); OR={}; OV={}; ON={kill:{},protect:{},investigate:{},res:{}};
     pushAll(); render();
   },
@@ -1010,11 +1043,11 @@ function vSetup(){
 }
 function roleCardHTML(p,mates,btn){
   const d=defs()[p.role];
-  return `<div class="desc">${esc(p.name)}, you are…</div>
+  return `<div class="flipwrap ${FL?"on":""}"><div class="fci" data-a="flip"><div class="ff"><div class="fq">🎭</div><div class="ft">Tap to flip your card</div></div><div class="fb">`+`<div class="desc">${esc(p.name)}, you are…</div>
     <div class="role ${cls(p.role)}">${d.icon} ${esc(p.role)}</div>
     <p class="desc">${esc(d.desc)}</p>
     <p class="desc">Team: ${d.team}</p>
-    ${mates&&mates.length?`<p>Your Mafia team: <b>${mates.map(esc).join(", ")}</b></p>`:(d.team==="Mafia"?"<p>You're the only Mafia.</p>":"")}${btn||""}`;
+    ${mates&&mates.length?`<p>Your Mafia team: <b>${mates.map(esc).join(", ")}</b></p>`:(d.team==="Mafia"?"<p>You're the only Mafia.</p>":"")}</div></div><div class="after" style="margin-top:12px">${btn||""}</div></div>`;
 }
 function vReveal(){
   const p=S.players[S.revealIdx], last=S.revealIdx===S.players.length-1;
@@ -1047,7 +1080,7 @@ function vNight(){
 }
 function nightLines(info){
   const out=[];
-  out.push(info.killed?{text:`☠️ ${info.killed} was killed.`,say:`${info.killed} was killed.`,cue:"kill"}
+  out.push(info.killed?{text:`☠️ ${info.killed} was killed.`,say:`${spoken(info.killed)} was killed.`,cue:"kill"}
                       :{text:"🌅 Nobody died tonight.",say:"Nobody died tonight.",cue:"calm"});
   if(info.doc===true) out.push({text:"💉 The Doctor saved the right person!",say:"The doctor saved the right person.",cue:"good"});
   else if(info.doc===false) out.push({text:"💉 The Doctor picked the wrong person.",say:"The doctor picked the wrong person.",cue:"bad"});
@@ -1130,6 +1163,8 @@ function vHostLobby(){
     ${rolesCard(n)}
     <div class="card"><h2>⏱ Discussion timer</h2><select data-f="dayLen">${[[0,"No timer (narrator opens the vote)"],[60,"1 minute"],[120,"2 minutes"],[180,"3 minutes"],[300,"5 minutes"],[600,"10 minutes"]].map(o=>`<option value="${o[0]}" ${S.dayLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
       <div class="desc">When time runs out during the day, voting opens automatically.</div></div>
+    <div class="card"><h2>🌙 Night timer</h2><select data-f="nightLen">${[[0,"No timer (wait for everyone)"],[10,"10 seconds"],[15,"15 seconds"],[20,"20 seconds"],[30,"30 seconds"],[45,"45 seconds"],[60,"1 minute"]].map(o=>`<option value="${o[0]}" ${S.nightLen===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+      <div class="desc">Time each special role gets to choose. Anyone who hasn't chosen is skipped.</div></div>
     <button class="btn" data-a="hostStart" ${err?"disabled":""}>Deal roles &amp; start</button>
     ${S.camErr?`<div class="warn center">${esc(S.camErr)}</div>`:""}
     <p class="desc center">Keep this page open for the whole game — it runs the room.</p>`;
@@ -1187,9 +1222,8 @@ function vClient(){
       const prompt={kill:"Choose who the Mafia eliminate tonight."+(m.mates.length?` (Agree with ${m.mates.map(esc).join(", ")}!)`:""),protect:"Choose who to protect tonight.",investigate:"Choose who to investigate."}[ab];
       b=`<p>${prompt}</p>`+V.roster.map((r,i)=>`<button class="pick ${V.act.targets.includes(i)?"":"dead"} ${V.act.chosen===i?"sel":""}" data-a="cAct" data-v="${i}">${esc(r.name)}</button>`).join("");
       if(V.act.chosen!==null) b+=`<div class="ok center">✓ Locked in — you can still change it.</div>`;
-      if(ab==="investigate"&&V.act.result!==null) b+=`<div class="card center"><div class="desc">Result</div><div class="big">${V.act.result?"👍 MAFIA":"👎 NOT Mafia"}</div></div>`;
     } else b=`<div class="center"><div class="big">😴</div><div class="desc">Close your eyes. Wait for morning.</div></div>`;
-    return `<div class="topbar"><span>Night ${V.round}</span><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span></div><div class="card"><h2>🌙 Night</h2>${b}</div>`;
+    return `<div class="topbar"><span>Night ${V.round}</span><span class="${cls(m.role)}">${m.icon} ${esc(m.role)}</span></div><div class="card"><h2>🌙 Night</h2>${nightBar()}${b}</div>`;
   }
   if(V.phase==="day"){
     const L=V.last;
@@ -1228,6 +1262,7 @@ function resetBar(){
 
 let lastKey="";
 function render(keepFocus){
+  if(curPhase()!=="reveal") FL=false;
   const ae=document.activeElement, focusKey=ae&&(ae.id||ae.dataset.f), selStart=ae&&ae.selectionStart;
   let html;
   if(S.mode==="online-client") html=S.phase==="client"?vClient():(S.phase==="join"?vJoin():vConnecting());
@@ -1254,7 +1289,7 @@ document.addEventListener("click",e=>{
 document.addEventListener("input",e=>{
   const f=e.target.dataset&&e.target.dataset.f; if(!f) return;
   if(f==="cam"){ A.setCam(); return; }
-  if(f==="dayLen"||f==="hostPlays") return;
+  if(f==="dayLen"||f==="hostPlays"||f==="nightLen") return;
   if(f==="modName"){ S.modName=e.target.value.slice(0,20)||"Moderator"; if(S.mode==="online-host"&&peer){ pushAll(); updateMeet(); } return; }
   S.cd[f]=e.target.value;
 });
@@ -1262,6 +1297,7 @@ document.addEventListener("change",e=>{
   const f=e.target.dataset&&e.target.dataset.f;
   if(f==="cam") S.useCam=e.target.checked;
   else if(f==="dayLen") S.dayLen=+e.target.value;
+  else if(f==="nightLen") S.nightLen=+e.target.value;
   else if(f==="hostPlays"){ S.hostPlays=e.target.checked; if(S.auto) S.counts=suggest(nPlayers()); pushAll(); render(); }
   else if(f) S.cd[f]=e.target.value;
 });
@@ -1273,7 +1309,7 @@ S.confirmReset=false;
 const q=new URLSearchParams(location.search).get("room");
 if(q&&S.phase==="home"){ S.phase="join"; S.joinCode=q.toUpperCase().slice(0,5); }
 render();
-window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){V=v;},get peer(){return peer;},set peer(v){peer=v;},render,meet,camMap};
+window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){V=v;},get peer(){return peer;},set peer(v){peer=v;},render,meet,camMap,spoken,nightLines};
 })();
 </script>
 <script>
@@ -1306,5 +1342,5 @@ window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){
   try{ const p=snd.play(); if(p&&p.then) p.then(start).catch(()=>{}); }catch(e){}
 })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v16 · own relay</div></body>
+<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v17 · flip card + night timer</div></body>
 </html>
