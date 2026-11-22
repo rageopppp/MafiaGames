@@ -290,6 +290,11 @@ function fakeStream(label){
 const ICE={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"},
   {urls:["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443","turn:openrelay.metered.ca:443?transport=tcp","turns:openrelay.metered.ca:443?transport=tcp"],username:"openrelayproject",credential:"openrelayproject"},
   {urls:["turn:eu-0.turn.peerjs.com:3478","turn:us-0.turn.peerjs.com:3478"],username:"peerjs",credential:"peerjsp"}],iceCandidatePoolSize:4};
+/* ---- OPTIONAL dedicated relay (free at metered.ca): paste your two values between the quotes ---- */
+const METERED_APP="", METERED_KEY="";
+if(METERED_APP&&METERED_KEY){
+  try{ fetch("https://"+METERED_APP+".metered.live/api/v1/turn/credentials?apiKey="+METERED_KEY).then(r=>r.json()).then(a=>{ if(Array.isArray(a)&&a.length){ ICE.iceServers=a.concat(ICE.iceServers); } }).catch(()=>{}); }catch(_){}
+}
 let mediaP=Promise.resolve(), connTimer=null;
 const INAPP=/FBAN|FBAV|Instagram|Snapchat|TikTok|musical_ly|Line\/|; wv\)|WhatsApp/i.test(navigator.userAgent||"");
 async function initMedia(label){
@@ -1301,5 +1306,5 @@ window.__mafia={A,get S(){return S;},set S(v){S=v;},get V(){return V;},set V(v){
   try{ const p=snd.play(); if(p&&p.then) p.then(start).catch(()=>{}); }catch(e){}
 })();
 </script>
-<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v14 · built-in connection + more relays</div></body>
+<div style="position:fixed;right:6px;bottom:4px;font:10px sans-serif;opacity:.45;color:#fff;z-index:5;pointer-events:none">v15 · relay-ready</div></body>
 </html>
